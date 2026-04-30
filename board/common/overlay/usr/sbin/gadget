@@ -4,10 +4,32 @@
 
 sed -i '/^ttyGS0/d' /etc/inittab
 kill -HUP 1
-if [ x$1 = "xinit" -a ! -f /tmp/gadget ] ; then
+if [ x$1 = "xinit" -a ! -f /tmp/gadget -a ! -f /tmp/otg-fwd-mode ] ; then
 	exit 0
 fi
 rm -f /tmp/gadget
+
+ensure_otg_network() {
+	if ip link show usb0 >/dev/null 2>&1; then
+		ip link set usb0 up >/dev/null 2>&1 || true
+		if ! ip -4 addr show usb0 2>/dev/null | grep -q 'inet 192\.168\.5\.1/24'; then
+			ip addr flush dev usb0 >/dev/null 2>&1 || true
+			ip addr add 192.168.5.1/24 dev usb0 >/dev/null 2>&1 || \
+				ifconfig usb0 192.168.5.1 netmask 255.255.255.0 up >/dev/null 2>&1 || true
+		fi
+	else
+		ifconfig usb0 192.168.5.1 netmask 255.255.255.0 up >/dev/null 2>&1 || true
+	fi
+
+	killall -q udhcpd >/dev/null 2>&1 || true
+	udhcpd -S /etc/udhcpd_usb0.conf >/dev/null 2>&1 || true
+}
+
+ensure_otg_serial_getty() {
+	grep -q '^ttyGS0::respawn:/sbin/agetty ttyGS0' /etc/inittab || \
+		echo 'ttyGS0::respawn:/sbin/agetty ttyGS0' >> /etc/inittab
+	kill -HUP 1
+}
 
 # debugfs
 [ ! -e /sys/kernel/debug/usb/fcc00000.usb/mode ] && mount -t debugfs none /sys/kernel/debug
@@ -25,6 +47,12 @@ fi
 
 # 若存在 gadget g1 则先删除
 if [ -d /sys/kernel/config/usb_gadget/g1 ]; then
+	if [ x$1 = "xinit" ] && [ -f /tmp/otg-fwd-mode ]; then
+		echo ">>>>>>>>>>>>g1 already exists; repairing special OTG gadget networking"
+		ensure_otg_serial_getty
+		ensure_otg_network
+		exit 0
+	fi
 
 	ifdown usb0
 
@@ -130,4 +158,4 @@ echo 'ttyGS0::respawn:/sbin/agetty ttyGS0' >> /etc/inittab
 kill -HUP 1
 
 # start network on usb network
-ifup usb0
+ifup usb0 || { [ -f /tmp/otg-fwd-mode ] && ensure_otg_network; }
