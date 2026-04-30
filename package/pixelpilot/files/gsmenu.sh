@@ -709,6 +709,9 @@ case "$@" in
         EXCLUDE_IFACE="wlan0"
         SSID="${6:-OpenIPC}"
         PASSWORD="${7:-12345678}"
+        case "$5" in
+            apfpv|wfb) mkdir -p /overlay/otg-forwarder; touch /overlay/otg-forwarder/firstboot-rx-default-applied; echo "$5" > /overlay/otg-forwarder/rx-mode ;;
+        esac
         if [ "$5" = "apfpv" ]; then
             /etc/init.d/S98adaptive-link stop
             /etc/init.d/S98wifibroadcast stop

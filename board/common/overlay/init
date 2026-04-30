@@ -159,6 +159,42 @@ then
   touch /tmp/gadget
 fi
 
+# HDMI-absent OTG forwarder mode. This reuses gadget mode but
+# marks a separate boot path so PixelPilot can be skipped.
+otg_fwd_rx_mode() {
+  if [ ! -f /overlay/otg-forwarder/firstboot-rx-default-applied ]; then
+    echo apfpv
+    return
+  fi
+  if [ -r /overlay/root/etc/default/wifibroadcast ]; then
+    . /overlay/root/etc/default/wifibroadcast
+  elif [ -r /etc/default/wifibroadcast ]; then
+    . /etc/default/wifibroadcast
+  fi
+  if [ x"${WIFIBROADCAST_ENABLED:-true}" = x"false" ]; then
+    echo apfpv
+  else
+    echo wfb
+  fi
+}
+HDMI_STATUS_FOUND=0
+HDMI_CONNECTED=0
+for HDMI_STATUS in /sys/class/drm/*HDMI*/status /sys/class/drm/*hdmi*/status; do
+  [ -e "$HDMI_STATUS" ] || continue
+  HDMI_STATUS_FOUND=1
+  if grep -q "^connected$" "$HDMI_STATUS"; then
+    HDMI_CONNECTED=1
+  fi
+done
+if [ "$HDMI_STATUS_FOUND" = "1" ] && [ "$HDMI_CONNECTED" = "0" ]; then
+  OTG_FWD_RX_MODE=$(otg_fwd_rx_mode)
+  echo '<0>otg_fwd_mode: Headless gadget mode forwarder active. HDMI absent during boot.' > /dev/kmsg
+  echo '<0>otg_fwd_mode: reboot with HDMI connected for normal HDMI/PixelPilot operation' > /dev/kmsg
+  touch /tmp/gadget
+  touch /tmp/otg-fwd-mode
+  echo "$OTG_FWD_RX_MODE" > /tmp/otg-fwd-rx-mode
+fi
+
 overlay_rootdir=/overlay/root
 overlay_workdir=/overlay/work
 mkdir -p $overlay_rootdir $overlay_workdir

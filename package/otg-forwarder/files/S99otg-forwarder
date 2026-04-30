@@ -1,0 +1,46 @@
+#!/bin/sh
+# Starts the headless OTG forwarder only in HDMI-absent OTG mode.
+
+test -r /etc/default/otg-forwarder && . /etc/default/otg-forwarder
+
+if [ x"${OTG_FORWARDER_ENABLED:-true}" = x"false" ]; then
+	echo "Starting otg-forwarder: skipped (disabled)"
+	exit 0
+fi
+
+if [ ! -f /tmp/otg-fwd-mode ]; then
+	echo "Starting otg-forwarder: skipped (not headless OTG mode)"
+	exit 0
+fi
+
+rx_mode="$(cat /tmp/otg-fwd-rx-mode 2>/dev/null || echo apfpv)"
+case "$rx_mode" in
+	wfb) camera_ip="${OTG_FORWARDER_CAMERA_IP_WFB:-10.5.0.10}" ;;
+	*) camera_ip="${OTG_FORWARDER_CAMERA_IP_APFPV:-192.168.0.1}" ;;
+esac
+
+start() {
+	printf "Starting otg-forwarder: "
+	start-stop-daemon -S -b -q -m -p /var/run/otg-forwarder.pid \
+		-x /usr/bin/otg-forwarder -- \
+		-p "${OTG_FORWARDER_IN_PORT:-5600}" \
+		-o "${OTG_FORWARDER_OUT_PORT:-5600}" \
+		-f "${OTG_FORWARDER_FORWARD_IP:-192.168.5.10}" \
+		-c "$camera_ip" \
+		${OTG_FORWARDER_EXTRA_ARGS:-}
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+	printf "Stopping otg-forwarder: "
+	start-stop-daemon -K -q -p /var/run/otg-forwarder.pid
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	restart|reload) stop; start ;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
+exit $?

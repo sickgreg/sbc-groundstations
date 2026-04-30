@@ -1,0 +1,20 @@
+#!/bin/sh
+# Apply APFPV as the global first-boot RX default using gsmenu's mode switch path.
+
+MARKER=/overlay/otg-forwarder/firstboot-rx-default-applied
+mkdir -p /overlay/otg-forwarder
+
+if [ -f "$MARKER" ]; then
+	exit 0
+fi
+
+if [ -x /usr/bin/gsmenu.sh ]; then
+	/usr/bin/gsmenu.sh set gs system rx_mode apfpv OpenIPC 12345678 || true
+else
+	sed -i 's/WIFIBROADCAST_ENABLED.*/WIFIBROADCAST_ENABLED=false/' /etc/default/wifibroadcast 2>/dev/null || true
+	sed -i 's/ADAPTIVE_LINK_ENABLED.*/ADAPTIVE_LINK_ENABLED=false/' /etc/default/adaptive-link 2>/dev/null || true
+fi
+
+echo apfpv > /overlay/otg-forwarder/rx-mode
+touch "$MARKER"
+exit 0

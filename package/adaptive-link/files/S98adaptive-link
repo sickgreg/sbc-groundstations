@@ -6,6 +6,11 @@
 # Allow a few customizations from a config file
 test -r /etc/default/adaptive-link && . /etc/default/adaptive-link
 
+if [ -f /tmp/otg-fwd-mode ] && [ "$(cat /tmp/otg-fwd-rx-mode 2>/dev/null)" = "apfpv" ]; then
+	echo "Starting adaptive-link... skipped (special OTG APFPV mode)"
+	exit 0
+fi
+
 if [ x$ADAPTIVE_LINK_ENABLED = x"false" ]
 then
 	echo "Starting adaptive-link... skipped (disabled)"
