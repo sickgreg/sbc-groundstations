@@ -80,7 +80,11 @@ fi
 # 定义一些变量
 HOST_MAC="48:6f:73:74:50:43"
 DEVICE_MAC="42:61:64:55:53:42"
-MASS_FILE=$(/usr/sbin/auto-dvr.sh  | cut -d: -f 2)
+SPECIAL_OTG=0
+[ -f /tmp/otg-fwd-mode ] && SPECIAL_OTG=1
+if [ "$SPECIAL_OTG" != "1" ]; then
+	MASS_FILE=$(/usr/sbin/auto-dvr.sh  | cut -d: -f 2)
+fi
 
 # MASS_FILE=/root/usbdisk.img
 # 若指定块设备不存在则创建一个测试用镜像
@@ -109,11 +113,19 @@ uname -r > strings/0x409/manufacturer
 hostname -s > strings/0x409/product
 
 # 创建config1
-echo ">>>>>>>>>>>Create config1: ACM + Mass_Storage + NCM ......"
+if [ "$SPECIAL_OTG" = "1" ]; then
+	echo ">>>>>>>>>>>Create config1: ACM + NCM ......"
+else
+	echo ">>>>>>>>>>>Create config1: ACM + Mass_Storage + NCM ......"
+fi
 mkdir -p configs/c.1/strings/0x409
 echo "0x80" > configs/c.1/bmAttributes
 echo 250 > configs/c.1/MaxPower
-echo "config1: ACM + Mass_Storage + NCM" > configs/c.1/strings/0x409/configuration
+if [ "$SPECIAL_OTG" = "1" ]; then
+	echo "config1: ACM + NCM" > configs/c.1/strings/0x409/configuration
+else
+	echo "config1: ACM + Mass_Storage + NCM" > configs/c.1/strings/0x409/configuration
+fi
 
 # 创建NCM function
 echo ">>>>>>>>Create RNDIS ......"
@@ -125,13 +137,15 @@ echo "$DEVICE_MAC" > functions/ncm.usb0/dev_addr
 echo ">>>>>>>>Create serial ......"
 mkdir -p functions/acm.gs0
 
-# 创建mass_storage function
-echo ">>>>>>>>Create Mass_Storage ......"
-mkdir -p functions/mass_storage.usb0
-echo 1 > functions/mass_storage.usb0/stall
-# echo 1 > functions/mass_storage.usb0/lun.0/ro
-echo 1 > functions/mass_storage.usb0/lun.0/removable
-echo $MASS_FILE > functions/mass_storage.usb0/lun.0/file
+if [ "$SPECIAL_OTG" != "1" ]; then
+	# 创建mass_storage function
+	echo ">>>>>>>>Create Mass_Storage ......"
+	mkdir -p functions/mass_storage.usb0
+	echo 1 > functions/mass_storage.usb0/stall
+	# echo 1 > functions/mass_storage.usb0/lun.0/ro
+	echo 1 > functions/mass_storage.usb0/lun.0/removable
+	echo $MASS_FILE > functions/mass_storage.usb0/lun.0/file
+fi
 
 # 创建adb function
 # mkdir -p functions/ffs.adb
@@ -145,7 +159,9 @@ echo $MASS_FILE > functions/mass_storage.usb0/lun.0/file
 # 将对应function软连到c.1下面, 即启用该function，MAX 3 functions
 ln -s functions/ncm.usb0 configs/c.1/
 ln -s functions/acm.gs0 configs/c.1/
-ln -s functions/mass_storage.usb0 configs/c.1/
+if [ "$SPECIAL_OTG" != "1" ]; then
+	ln -s functions/mass_storage.usb0 configs/c.1/
+fi
 # ln -s functions/ffs.adb configs/c.1/
 
 # 将gadget绑定到USB接
