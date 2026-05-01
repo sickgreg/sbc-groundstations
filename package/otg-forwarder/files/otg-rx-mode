@@ -27,6 +27,49 @@ restart_forwarder_for_otg() {
 	/etc/init.d/S99otg-forwarder start || true
 }
 
+kill_cmdline() {
+	pattern="$1"
+	for PID in $(ps w | awk "/$pattern/ {print \$1}"); do
+		kill "$PID" >/dev/null 2>&1 || true
+	done
+}
+
+start_wfb_for_otg() {
+	[ -f /tmp/otg-fwd-mode ] || return 0
+	WIFI_IFACES="$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^wlx')"
+
+	/etc/init.d/S97otg-fwd-apfpv stop >/dev/null 2>&1 || true
+	/etc/init.d/S98wifibroadcast stop >/dev/null 2>&1 || true
+	/etc/init.d/S98adaptive-link stop >/dev/null 2>&1 || true
+	killall wpa_supplicant udhcpc wfb-server >/dev/null 2>&1 || true
+	kill_cmdline '[a]link_gs'
+	rm -f /var/run/adaptive-link.pid /var/run/wifibroadcast.pid
+
+	for IFACE in $WIFI_IFACES; do
+		ifdown "$IFACE" >/dev/null 2>&1 || true
+		rm -f "/etc/network/interfaces.d/$IFACE"
+	done
+
+	rmmod 8812eu >/dev/null 2>&1 || true
+	rmmod 88XXau_wfb >/dev/null 2>&1 || true
+	modprobe 8812eu >/dev/null 2>&1 || true
+	modprobe 88XXau_wfb >/dev/null 2>&1 || true
+	sed -i 's/WIFIBROADCAST_ENABLED.*/WIFIBROADCAST_ENABLED=true/' /etc/default/wifibroadcast
+	sed -i 's/ADAPTIVE_LINK_ENABLED.*/ADAPTIVE_LINK_ENABLED=true/' /etc/default/adaptive-link
+	/etc/init.d/S98adaptive-link start || true
+	/etc/init.d/S98wifibroadcast start || true
+}
+
+start_apfpv_for_otg() {
+	[ -f /tmp/otg-fwd-mode ] || return 0
+	/etc/init.d/S98adaptive-link stop >/dev/null 2>&1 || true
+	/etc/init.d/S98wifibroadcast stop >/dev/null 2>&1 || true
+	killall wfb-server >/dev/null 2>&1 || true
+	kill_cmdline '[a]link_gs'
+	rm -f /var/run/adaptive-link.pid /var/run/wifibroadcast.pid
+	/etc/init.d/S97otg-fwd-apfpv start || true
+}
+
 status() {
 	mode="$(current_rx_mode)"
 	echo "rx_mode=$mode"
@@ -59,8 +102,11 @@ case "$cmd" in
 			echo "gsmenu.sh not found" >&2
 			exit 1
 		fi
-		if [ -f /tmp/otg-fwd-mode ] && [ "$cmd" = "apfpv" ]; then
-			/etc/init.d/S97otg-fwd-apfpv start || true
+		if [ -f /tmp/otg-fwd-mode ]; then
+			case "$cmd" in
+				wfb) start_wfb_for_otg ;;
+				apfpv) start_apfpv_for_otg ;;
+			esac
 		fi
 		restart_forwarder_for_otg
 		status
