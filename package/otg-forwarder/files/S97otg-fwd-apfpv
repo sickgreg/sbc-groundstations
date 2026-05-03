@@ -1,52 +1,60 @@
 #!/bin/sh
-# Start APFPV receive networking only for special OTG forwarder mode.
+# Start APFPV receive networking for special OTG forwarder mode by using
+# the same gsmenu/ifup path as normal HDMI mode.
 
 [ -f /tmp/otg-fwd-mode ] || exit 0
 [ "$(cat /tmp/otg-fwd-rx-mode 2>/dev/null)" = "apfpv" ] || exit 0
 
 echo "Starting special OTG APFPV networking"
-/etc/init.d/S98adaptive-link stop >/dev/null 2>&1 || true
-/etc/init.d/S98wifibroadcast stop >/dev/null 2>&1 || true
-killall wpa_supplicant >/dev/null 2>&1 || true
-killall udhcpc >/dev/null 2>&1 || true
 
-rmmod 8812eu >/dev/null 2>&1 || true
-rmmod 88XXau_wfb >/dev/null 2>&1 || true
-modprobe 8812eu >/dev/null 2>&1 || true
-modprobe 88XXau_wfb >/dev/null 2>&1 || true
-
-conf=/tmp/wpa_supplicant.apfpv.conf
-if [ -r /etc/wpa_supplicant.apfpv.conf ]; then
-	conf=/etc/wpa_supplicant.apfpv.conf
-else
-	cat > "$conf" <<'APFPVEOF'
-network={
-    ssid="OpenIPC"
-    psk="12345678"
-}
-APFPVEOF
-fi
-
-iface=""
-for _ in $(seq 1 60); do
-	for path in /sys/class/net/wlx*; do
-		[ -e "$path" ] || continue
-		candidate="$(basename "$path")"
-		[ "$candidate" = "wlan0" ] && continue
-		iface="$candidate"
-		break
-	done
-	[ -n "$iface" ] && break
-	sleep 1
-done
-
-if [ -z "$iface" ]; then
-	echo "special OTG APFPV: no wlx interface found after wait"
+if [ ! -x /usr/bin/gsmenu.sh ]; then
+	echo "special OTG APFPV: gsmenu.sh not found"
 	exit 0
 fi
 
-ip link set "$iface" up >/dev/null 2>&1 || true
-wpa_supplicant -B -i "$iface" -c "$conf" >/tmp/otg-fwd-wpa.log 2>&1 || true
-udhcpc -b -t 5 -A 3 -i "$iface" -s /etc/udhcpc/udhcpc.apfpv.script >/tmp/otg-fwd-udhcpc.log 2>&1 || true
-echo "$iface" > /tmp/otg-fwd-apfpv-iface
+ssid="$(grep -m1 '^[[:space:]]*ssid=' /etc/wpa_supplicant.apfpv.conf 2>/dev/null | cut -d '"' -f 2)"
+pass="$(grep -m1 '^[[:space:]]*psk=' /etc/wpa_supplicant.apfpv.conf 2>/dev/null | cut -d '"' -f 2)"
+ssid="${ssid:-OpenIPC}"
+pass="${pass:-12345678}"
+
+apply_apfpv_mode() {
+	/usr/bin/gsmenu.sh set gs system rx_mode apfpv "$ssid" "$pass" || true
+}
+
+ifdown_apfpv_ifaces() {
+	for conn in /etc/network/interfaces.d/wlx*; do
+		[ -f "$conn" ] || continue
+		ifdown "$(basename "$conn")" >/dev/null 2>&1 || true
+	done
+}
+
+has_auto_apfpv_iface() {
+	for conn in /etc/network/interfaces.d/wlx*; do
+		[ -f "$conn" ] || continue
+		grep -q "^auto $(basename "$conn")$" "$conn" && return 0
+	done
+	return 1
+}
+
+ifdown_apfpv_ifaces
+apply_apfpv_mode
+
+for _ in $(seq 1 60); do
+	if ps | grep '[w]pa_supplicant' >/dev/null 2>&1 || ps | grep '[u]dhcpc' >/dev/null 2>&1; then
+		break
+	fi
+	if ! has_auto_apfpv_iface && ls /sys/class/net/wlx* >/dev/null 2>&1; then
+		apply_apfpv_mode
+	fi
+	for conn in /etc/network/interfaces.d/wlx*; do
+		[ -f "$conn" ] || continue
+		if grep -q "^auto $(basename "$conn")$" "$conn"; then
+			if ifup "$(basename "$conn")" >/dev/null 2>&1; then
+				break
+			fi
+		fi
+	done
+	sleep 1
+done
+
 exit 0
