@@ -1,0 +1,6 @@
+config BR2_PACKAGE_OTG_WEBUI
+	bool "otg-webui"
+	depends on BR2_PACKAGE_PYTHON3
+	depends on BR2_PACKAGE_OTG_FORWARDER
+	help
+	  Small USB-gadget web control panel for special headless OTG mode.
