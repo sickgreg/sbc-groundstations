@@ -3,6 +3,11 @@
 # Starts pixelpilot.
 #
 
+if [ -f /tmp/otg-fwd-mode ]; then
+	echo "Starting pixelpilot: skipped (headless OTG forwarder mode)"
+	exit 0
+fi
+
 # Allow a few customizations from a config file
 test -r /etc/default/pixelpilot && . /etc/default/pixelpilot
 

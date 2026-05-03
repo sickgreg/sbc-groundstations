@@ -1,0 +1,72 @@
+#!/bin/sh
+# Select or show the RX mode used by both HDMI mode and special OTG mode.
+# Uses gsmenu's rx_mode switch path so the selection persists normally.
+
+usage() {
+	echo "Usage: otg-rx-mode {status|apfpv|wfb} [ssid] [password]"
+}
+
+current_rx_mode() {
+	if [ -r /etc/default/wifibroadcast ]; then
+		. /etc/default/wifibroadcast
+	fi
+	if [ x"${WIFIBROADCAST_ENABLED:-true}" = x"false" ]; then
+		echo apfpv
+	else
+		echo wfb
+	fi
+}
+
+restart_forwarder_for_otg() {
+	[ -f /tmp/otg-fwd-mode ] || return 0
+	mode="$(current_rx_mode)"
+	echo "$mode" > /tmp/otg-fwd-rx-mode
+	mkdir -p /overlay/otg-forwarder
+	echo "$mode" > /overlay/otg-forwarder/rx-mode
+	/etc/init.d/S99otg-forwarder stop >/dev/null 2>&1 || true
+	/etc/init.d/S99otg-forwarder start || true
+}
+
+status() {
+	mode="$(current_rx_mode)"
+	echo "rx_mode=$mode"
+	[ -f /tmp/otg-fwd-mode ] && echo "otg_special_mode=on" || echo "otg_special_mode=off"
+	[ -f /tmp/otg-fwd-rx-mode ] && echo "otg_boot_rx_mode=$(cat /tmp/otg-fwd-rx-mode)"
+	if [ -r /overlay/otg-forwarder/rx-mode ]; then
+		echo "persisted_rx_mode=$(cat /overlay/otg-forwarder/rx-mode)"
+	fi
+	ps | grep otg-forwarder | grep -v grep || true
+	ps | grep wfb | grep -v grep || true
+	ps | grep alink | grep -v grep || true
+	ps | grep wpa_supplicant | grep -v grep || true
+	ps | grep udhcpc | grep -v grep || true
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+	status)
+		status
+		;;
+	apfpv|wfb)
+		ssid="${2:-OpenIPC}"
+		pass="${3:-12345678}"
+		mkdir -p /overlay/otg-forwarder
+		touch /overlay/otg-forwarder/firstboot-rx-default-applied
+		echo "$cmd" > /overlay/otg-forwarder/rx-mode
+		if [ -f /tmp/otg-fwd-mode ] && [ "$cmd" = "apfpv" ]; then
+			echo apfpv > /tmp/otg-fwd-rx-mode
+			/etc/init.d/S97otg-fwd-apfpv start || true
+		elif [ -x /usr/bin/gsmenu.sh ]; then
+			/usr/bin/gsmenu.sh set gs system rx_mode "$cmd" "$ssid" "$pass"
+		else
+			echo "gsmenu.sh not found" >&2
+			exit 1
+		fi
+		restart_forwarder_for_otg
+		status
+		;;
+	*)
+		usage >&2
+		exit 1
+		;;
+esac

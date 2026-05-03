@@ -1,0 +1,4 @@
+config BR2_PACKAGE_OTG_FORWARDER
+	bool "otg-forwarder"
+	help
+	  Headless OTG video/control forwarder for Radxa Zero 3W images.

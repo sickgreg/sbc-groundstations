@@ -6,6 +6,11 @@
 # Allow a few customizations from a config file
 test -r /etc/default/wifibroadcast && . /etc/default/wifibroadcast
 
+if [ -f /tmp/otg-fwd-mode ] && [ "$(cat /tmp/otg-fwd-rx-mode 2>/dev/null)" = "apfpv" ]; then
+	echo "Starting wifibroadcast... skipped (special OTG APFPV mode)"
+	exit 0
+fi
+
 if [ x$WIFIBROADCAST_ENABLED = x"false" ]
 then
 	echo "Starting wifibroadcast... skipped (disabled)"
