@@ -27,6 +27,10 @@ h1 { margin:0; font-size:18px; font-weight:650; }
 h2 { margin:0 0 10px; font-size:15px; font-weight:650; }
 main { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; padding:12px; }
 section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+.section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.section-head h2 { margin:0; }
+.minimize { flex:0 0 auto; width:32px; height:28px; padding:0; font-size:18px; line-height:1; }
+.minimized .collapsible { display:none; }
 label { display:block; color:var(--muted); font-size:12px; margin:10px 0 4px; }
 input, select { width:100%; border:1px solid var(--line); border-radius:6px; padding:8px; background:#0c1014; color:var(--text); }
 button { border:1px solid var(--line); border-radius:6px; padding:8px 10px; color:var(--text); background:#22303a; cursor:pointer; }
@@ -54,14 +58,19 @@ td, th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; 
   </div>
 </header>
 <main>
-  <section>
-    <h2>RX Mode</h2>
+  <section id="statusPane">
+    <div class="section-head">
+      <h2>RX Mode</h2>
+      <button class="minimize" onclick="togglePane('statusPane')" title="Minimize status pane" aria-label="Minimize status pane">-</button>
+    </div>
     <div class="row">
       <button class="primary" onclick="setMode('apfpv')">APFPV</button>
       <button class="primary" onclick="setMode('wfb')">WFB</button>
     </div>
-    <label>Status</label>
-    <pre id="modeStatus"></pre>
+    <div class="collapsible">
+      <label>Status</label>
+      <pre id="modeStatus"></pre>
+    </div>
   </section>
 
   <section>
@@ -89,14 +98,19 @@ td, th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; 
     <button style="margin-top:10px" onclick="saveWfb()">Save WFB</button>
   </section>
 
-  <section>
-    <h2>Forwarder</h2>
+  <section id="processPane">
+    <div class="section-head">
+      <h2>Forwarder</h2>
+      <button class="minimize" onclick="togglePane('processPane')" title="Minimize process pane" aria-label="Minimize process pane">-</button>
+    </div>
     <div class="row">
       <button onclick="postAction('restart-forwarder')">Restart Forwarder</button>
       <button onclick="refresh()">Refresh</button>
     </div>
-    <label>Processes</label>
-    <pre id="processes"></pre>
+    <div class="collapsible">
+      <label>Processes</label>
+      <pre id="processes"></pre>
+    </div>
   </section>
 
   <section class="full">
@@ -104,12 +118,31 @@ td, th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; 
     <table><thead><tr><th>Name</th><th>State</th><th>Addresses</th></tr></thead><tbody id="interfaces"></tbody></table>
   </section>
 
-  <section class="full">
-    <h2>Diagnostics</h2>
-    <pre id="diagnostics"></pre>
+  <section id="diagnosticPane" class="full">
+    <div class="section-head">
+      <h2>Diagnostics</h2>
+      <button class="minimize" onclick="togglePane('diagnosticPane')" title="Minimize diagnostic pane" aria-label="Minimize diagnostic pane">-</button>
+    </div>
+    <div class="collapsible">
+      <pre id="diagnostics"></pre>
+    </div>
   </section>
 </main>
 <script>
+function applyPaneState(id) {
+  const pane = document.getElementById(id);
+  const minimized = localStorage.getItem('otg-webui:' + id) === 'min';
+  pane.classList.toggle('minimized', minimized);
+  const btn = pane.querySelector('.minimize');
+  btn.textContent = minimized ? '+' : '-';
+  btn.title = minimized ? 'Restore pane' : 'Minimize pane';
+}
+function togglePane(id) {
+  const pane = document.getElementById(id);
+  const minimized = !pane.classList.contains('minimized');
+  localStorage.setItem('otg-webui:' + id, minimized ? 'min' : 'open');
+  applyPaneState(id);
+}
 async function api(path, body) {
   const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
   const res = await fetch(path, opt);
@@ -151,6 +184,7 @@ async function saveWfb() {
 }
 async function postAction(action) { await api('/api/action', {action}); await refresh(); }
 refresh();
+['statusPane', 'processPane', 'diagnosticPane'].forEach(applyPaneState);
 setInterval(refresh, 5000);
 </script>
 </body>
