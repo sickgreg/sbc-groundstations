@@ -13,29 +13,23 @@ if [ ! -f /tmp/otg-fwd-mode ]; then
 	exit 0
 fi
 
-HOST="${OTG_WEBUI_HOST:-192.168.5.1}"
+HOST="${OTG_WEBUI_HOST:-0.0.0.0}"
 PORT="${OTG_WEBUI_PORT:-8080}"
-WAIT_SECONDS="${OTG_WEBUI_WAIT_SECONDS:-20}"
 PIDFILE="/var/run/otg-webui.pid"
 
-wait_for_host_ip() {
-	i=0
-	while [ "$i" -lt "$WAIT_SECONDS" ]; do
-		if ip addr show | grep -q "inet ${HOST}/"; then
-			return 0
-		fi
-		i=$((i + 1))
-		sleep 1
-	done
-	return 1
+is_running() {
+	[ -r "$PIDFILE" ] || return 1
+	pid="$(cat "$PIDFILE" 2>/dev/null)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 start() {
 	printf "Starting otg-webui: "
-	wait_for_host_ip || {
-		echo "FAIL (${HOST} not configured)"
-		return 1
-	}
+	if is_running; then
+		echo "OK (already running)"
+		return 0
+	fi
+	rm -f "$PIDFILE"
 	start-stop-daemon -S -b -q -m -p "$PIDFILE" \
 		-x /usr/bin/python3 -- /usr/sbin/otg-webui \
 		--host "$HOST" --port "$PORT"
@@ -45,6 +39,7 @@ start() {
 stop() {
 	printf "Stopping otg-webui: "
 	start-stop-daemon -K -q -p "$PIDFILE"
+	rm -f "$PIDFILE"
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
 }
 
@@ -53,7 +48,7 @@ case "$1" in
 	stop) stop ;;
 	restart|reload) stop; start ;;
 	status)
-		if [ -r "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		if is_running; then
 			echo "otg-webui is running"
 		else
 			echo "otg-webui is stopped"
