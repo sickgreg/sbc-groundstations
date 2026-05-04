@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+import argparse
+import html
+import json
+import os
+import subprocess
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+GSMENU = "/usr/bin/gsmenu.sh"
+OTG_RX_MODE = "/usr/sbin/otg-rx-mode"
+
+
+HTML_PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OTG Ground Station</title>
+<style>
+:root { color-scheme: dark; --bg:#101418; --panel:#171d22; --line:#2d3841; --text:#edf3f7; --muted:#9baab4; --accent:#45b3d9; --ok:#55c27a; --warn:#d7a642; --bad:#dc6b6b; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
+header { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--line); background:#0d1115; }
+h1 { margin:0; font-size:18px; font-weight:650; }
+h2 { margin:0 0 10px; font-size:15px; font-weight:650; }
+main { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px; padding:12px; }
+section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-width:0; }
+.section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.section-head h2 { margin:0; }
+.minimize { flex:0 0 auto; width:32px; height:28px; padding:0; font-size:18px; line-height:1; }
+.minimized .collapsible { display:none; }
+label { display:block; color:var(--muted); font-size:12px; margin:10px 0 4px; }
+input, select { width:100%; border:1px solid var(--line); border-radius:6px; padding:8px; background:#0c1014; color:var(--text); }
+button { border:1px solid var(--line); border-radius:6px; padding:8px 10px; color:var(--text); background:#22303a; cursor:pointer; }
+button.primary { border-color:#2d7f9c; background:#1c5870; }
+button:disabled { opacity:.55; cursor:default; }
+.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.row > * { flex:1; }
+.badge { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:4px 8px; color:var(--muted); background:#0c1014; white-space:nowrap; }
+.badge.ok { color:var(--ok); }
+.badge.warn { color:var(--warn); }
+.badge.bad { color:var(--bad); }
+pre { margin:0; overflow:auto; white-space:pre-wrap; color:#c7d3da; background:#0c1014; border:1px solid var(--line); border-radius:6px; padding:8px; min-height:80px; }
+table { width:100%; border-collapse:collapse; }
+td, th { border-bottom:1px solid var(--line); padding:6px 4px; text-align:left; vertical-align:top; }
+.muted { color:var(--muted); }
+.full { grid-column:1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OTG Ground Station</h1>
+  <div class="row" style="flex:0 1 auto">
+    <span id="modeBadge" class="badge">mode</span>
+    <span id="otgBadge" class="badge">otg</span>
+  </div>
+</header>
+<main>
+  <section id="statusPane">
+    <div class="section-head">
+      <h2>RX Mode</h2>
+      <button class="minimize" onclick="togglePane('statusPane')" title="Minimize status pane" aria-label="Minimize status pane">-</button>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="setMode('apfpv')">APFPV</button>
+      <button class="primary" onclick="setMode('wfb')">WFB</button>
+    </div>
+    <div class="collapsible">
+      <label>Status</label>
+      <pre id="modeStatus"></pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>APFPV</h2>
+    <label>SSID</label>
+    <input id="apSsid" autocomplete="off">
+    <label>Password</label>
+    <input id="apPassword" type="password" placeholder="unchanged" autocomplete="off">
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveApfpv()">Save APFPV</button>
+      <button onclick="postAction('apfpv-reset')">Reset APFPV</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>WFB</h2>
+    <label>Channel</label>
+    <input id="wfbChannel" inputmode="numeric">
+    <label>Bandwidth</label>
+    <input id="wfbBandwidth" inputmode="numeric">
+    <label>TX Power</label>
+    <input id="wfbTxpower">
+    <label>Adaptive Link</label>
+    <select id="wfbAdaptive"><option value="">unchanged</option><option value="true">true</option><option value="false">false</option></select>
+    <button style="margin-top:10px" onclick="saveWfb()">Save WFB</button>
+  </section>
+
+  <section id="processPane">
+    <div class="section-head">
+      <h2>Forwarder</h2>
+      <button class="minimize" onclick="togglePane('processPane')" title="Minimize process pane" aria-label="Minimize process pane">-</button>
+    </div>
+    <div class="row">
+      <button onclick="postAction('restart-forwarder')">Restart Forwarder</button>
+      <button onclick="refresh()">Refresh</button>
+    </div>
+    <div class="collapsible">
+      <label>Processes</label>
+      <pre id="processes"></pre>
+    </div>
+  </section>
+
+  <section class="full">
+    <h2>Interfaces</h2>
+    <table><thead><tr><th>Name</th><th>State</th><th>Addresses</th></tr></thead><tbody id="interfaces"></tbody></table>
+  </section>
+
+  <section id="diagnosticPane" class="full">
+    <div class="section-head">
+      <h2>Diagnostics</h2>
+      <button class="minimize" onclick="togglePane('diagnosticPane')" title="Minimize diagnostic pane" aria-label="Minimize diagnostic pane">-</button>
+    </div>
+    <div class="collapsible">
+      <pre id="diagnostics"></pre>
+    </div>
+  </section>
+</main>
+<script>
+function applyPaneState(id) {
+  const pane = document.getElementById(id);
+  const minimized = localStorage.getItem('otg-webui:' + id) === 'min';
+  pane.classList.toggle('minimized', minimized);
+  const btn = pane.querySelector('.minimize');
+  btn.textContent = minimized ? '+' : '-';
+  btn.title = minimized ? 'Restore pane' : 'Minimize pane';
+}
+function togglePane(id) {
+  const pane = document.getElementById(id);
+  const minimized = !pane.classList.contains('minimized');
+  localStorage.setItem('otg-webui:' + id, minimized ? 'min' : 'open');
+  applyPaneState(id);
+}
+async function api(path, body) {
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
+  const res = await fetch(path, opt);
+  const data = await res.json();
+  if (!res.ok || data.ok === false) throw new Error(data.error || data.stderr || 'request failed');
+  return data;
+}
+function text(v) { return (v === undefined || v === null) ? '' : String(v); }
+function setBadge(el, label, cls) { el.className = 'badge ' + (cls || ''); el.textContent = label; }
+async function refresh() {
+  try {
+    const s = await api('/api/status');
+    setBadge(modeBadge, 'mode ' + text(s.rx_mode || 'unknown'), s.rx_mode === 'apfpv' || s.rx_mode === 'wfb' ? 'ok' : 'warn');
+    setBadge(otgBadge, s.otg_special_mode ? 'special OTG' : 'normal mode', s.otg_special_mode ? 'ok' : 'warn');
+    modeStatus.textContent = text(s.otg_rx_status);
+    if (document.activeElement !== apSsid) apSsid.value = text(s.apfpv.ssid);
+    if (document.activeElement !== wfbChannel) wfbChannel.value = text(s.wfb.gs_channel);
+    if (document.activeElement !== wfbBandwidth) wfbBandwidth.value = text(s.wfb.bandwidth);
+    if (document.activeElement !== wfbTxpower) wfbTxpower.value = text(s.wfb.txpower);
+    processes.textContent = text(s.processes);
+    interfaces.innerHTML = s.interfaces.map(i => `<tr><td>${i.name}</td><td>${i.state}</td><td>${i.addr}</td></tr>`).join('');
+    diagnostics.textContent = text(s.diagnostics);
+  } catch (e) {
+    setBadge(otgBadge, e.message, 'bad');
+  }
+}
+async function setMode(mode) { await api('/api/rx-mode', {mode}); await refresh(); }
+async function saveApfpv() {
+  const body = {ssid: apSsid.value};
+  if (apPassword.value) body.password = apPassword.value;
+  await api('/api/apfpv', body);
+  apPassword.value = '';
+  await refresh();
+}
+async function saveWfb() {
+  const body = {gs_channel:wfbChannel.value, bandwidth:wfbBandwidth.value, txpower:wfbTxpower.value, adaptivelink:wfbAdaptive.value};
+  await api('/api/wfb', body);
+  await refresh();
+}
+async function postAction(action) { await api('/api/action', {action}); await refresh(); }
+refresh();
+['statusPane', 'processPane', 'diagnosticPane'].forEach(applyPaneState);
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
+"""
+
+
+def run_cmd(args, timeout=5):
+    try:
+        proc = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "code": proc.returncode,
+            "stdout": proc.stdout[-6000:],
+            "stderr": proc.stderr[-3000:],
+        }
+    except FileNotFoundError:
+        return {"ok": False, "code": 127, "stdout": "", "stderr": f"{args[0]} not found"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "code": 124, "stdout": "", "stderr": "command timed out"}
+
+
+def first_line(result, default=""):
+    out = result.get("stdout", "").strip().splitlines()
+    return out[0] if out else default
+
+
+def get_gsmenu(*args):
+    return run_cmd([GSMENU, "get", *args])
+
+
+def set_gsmenu(*args):
+    return run_cmd([GSMENU, "set", *args], timeout=20)
+
+
+def parse_rx_mode(status_text):
+    for line in status_text.splitlines():
+        if line.startswith("rx_mode="):
+            return line.split("=", 1)[1].strip()
+    mode = first_line(get_gsmenu("gs", "system", "rx_mode"), "unknown")
+    return mode.strip() or "unknown"
+
+
+def parse_interfaces(text):
+    rows = []
+    for line in text.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 2:
+            parts.append("")
+        if len(parts) >= 3:
+            rows.append({
+                "name": html.escape(parts[0]),
+                "state": html.escape(parts[1]),
+                "addr": html.escape(parts[2]),
+            })
+    return rows
+
+
+def status_payload():
+    rx_status = run_cmd([OTG_RX_MODE, "status"])
+    ip_br = run_cmd(["ip", "-br", "addr"])
+    iw_dev = run_cmd(["iw", "dev"])
+    hdmi = run_cmd(["sh", "-c", "for s in /sys/class/drm/*HDMI*/status; do [ -r \"$s\" ] && echo \"$s=$(cat \"$s\")\"; done"])
+    ps = run_cmd(["sh", "-c", "ps | grep -E 'otg-forwarder|wfb|alink|wpa_supplicant|udhcpc|pixelpilot|pp_rk' | grep -v grep || true"])
+    return {
+        "ok": True,
+        "otg_special_mode": os.path.exists("/tmp/otg-fwd-mode"),
+        "rx_mode": parse_rx_mode(rx_status.get("stdout", "")),
+        "otg_rx_status": rx_status.get("stdout", "") + rx_status.get("stderr", ""),
+        "apfpv": {
+            "ssid": first_line(get_gsmenu("gs", "apfpv", "ssid")),
+        },
+        "wfb": {
+            "gs_channel": first_line(get_gsmenu("gs", "wfbng", "gs_channel")),
+            "bandwidth": first_line(get_gsmenu("gs", "wfbng", "bandwidth")),
+            "txpower": first_line(get_gsmenu("gs", "wfbng", "txpower")),
+            "adaptivelink": first_line(get_gsmenu("gs", "wfbng", "adaptivelink")),
+        },
+        "interfaces": parse_interfaces(ip_br.get("stdout", "")),
+        "processes": ps.get("stdout", ""),
+        "diagnostics": "\n".join([
+            "HDMI:",
+            hdmi.get("stdout", "").strip() or "none",
+            "",
+            "iw dev:",
+            iw_dev.get("stdout", "").strip() or iw_dev.get("stderr", "").strip() or "none",
+        ]),
+    }
+
+
+def json_response(handler, payload, code=200):
+    body = json.dumps(payload).encode("utf-8")
+    handler.send_response(code)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def html_response(handler):
+    body = HTML_PAGE.encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "otg-webui/0.1"
+
+    def log_message(self, fmt, *args):
+        print("%s - %s" % (self.address_string(), fmt % args), flush=True)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/":
+            html_response(self)
+        elif path == "/api/status":
+            json_response(self, status_payload())
+        else:
+            json_response(self, {"ok": False, "error": "not found"}, 404)
+
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 4096:
+            raise ValueError("request too large")
+        raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+        return json.loads(raw)
+
+    def do_POST(self):
+        try:
+            body = self.read_json()
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/api/rx-mode":
+                result = self.handle_rx_mode(body)
+            elif path == "/api/apfpv":
+                result = self.handle_apfpv(body)
+            elif path == "/api/wfb":
+                result = self.handle_wfb(body)
+            elif path == "/api/action":
+                result = self.handle_action(body)
+            else:
+                json_response(self, {"ok": False, "error": "not found"}, 404)
+                return
+            json_response(self, result, 200 if result.get("ok") else 400)
+        except (ValueError, json.JSONDecodeError) as exc:
+            json_response(self, {"ok": False, "error": str(exc)}, 400)
+
+    def handle_rx_mode(self, body):
+        mode = str(body.get("mode", ""))
+        if mode not in ("apfpv", "wfb"):
+            return {"ok": False, "error": "invalid mode"}
+        return run_cmd([OTG_RX_MODE, mode], timeout=30)
+
+    def handle_apfpv(self, body):
+        outputs = []
+        ssid = str(body.get("ssid", "")).strip()
+        password = str(body.get("password", "")).strip()
+        if ssid:
+            outputs.append(set_gsmenu("gs", "apfpv", "ssid", ssid))
+        if password:
+            outputs.append(set_gsmenu("gs", "apfpv", "password", password))
+        if not outputs:
+            return {"ok": True, "stdout": "no APFPV changes requested", "stderr": ""}
+        return combine(outputs)
+
+    def handle_wfb(self, body):
+        mapping = {
+            "gs_channel": ("gs", "wfbng", "gs_channel"),
+            "bandwidth": ("gs", "wfbng", "bandwidth"),
+            "txpower": ("gs", "wfbng", "txpower"),
+            "adaptivelink": ("gs", "wfbng", "adaptivelink"),
+        }
+        outputs = []
+        for key, gsmenu_args in mapping.items():
+            value = str(body.get(key, "")).strip()
+            if value:
+                outputs.append(set_gsmenu(*gsmenu_args, value))
+        if not outputs:
+            return {"ok": True, "stdout": "no WFB changes requested", "stderr": ""}
+        return combine(outputs)
+
+    def handle_action(self, body):
+        action = str(body.get("action", ""))
+        actions = {
+            "restart-forwarder": ["/etc/init.d/S99otg-forwarder", "restart"],
+            "apfpv-reset": [GSMENU, "set", "gs", "apfpv", "reset"],
+        }
+        if action not in actions:
+            return {"ok": False, "error": "invalid action"}
+        return run_cmd(actions[action], timeout=30)
+
+
+def combine(results):
+    return {
+        "ok": all(result.get("ok") for result in results),
+        "code": max((result.get("code", 0) for result in results), default=0),
+        "stdout": "\n".join(result.get("stdout", "") for result in results),
+        "stderr": "\n".join(result.get("stderr", "") for result in results),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="192.168.5.1")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(f"otg-webui listening on http://{args.host}:{args.port}", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

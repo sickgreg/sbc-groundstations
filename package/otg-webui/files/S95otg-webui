@@ -1,0 +1,60 @@
+#!/bin/sh
+# Starts the special OTG web UI only when HDMI-absent gadget mode is active.
+
+test -r /etc/default/otg-webui && . /etc/default/otg-webui
+
+if [ x"${OTG_WEBUI_ENABLED:-true}" = x"false" ]; then
+	echo "Starting otg-webui: skipped (disabled)"
+	exit 0
+fi
+
+if [ ! -f /tmp/otg-fwd-mode ]; then
+	echo "Starting otg-webui: skipped (not headless OTG mode)"
+	exit 0
+fi
+
+HOST="${OTG_WEBUI_HOST:-0.0.0.0}"
+PORT="${OTG_WEBUI_PORT:-8080}"
+PIDFILE="/var/run/otg-webui.pid"
+
+is_running() {
+	[ -r "$PIDFILE" ] || return 1
+	pid="$(cat "$PIDFILE" 2>/dev/null)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+	printf "Starting otg-webui: "
+	if is_running; then
+		echo "OK (already running)"
+		return 0
+	fi
+	rm -f "$PIDFILE"
+	start-stop-daemon -S -b -q -m -p "$PIDFILE" \
+		-x /usr/bin/python3 -- /usr/sbin/otg-webui \
+		--host "$HOST" --port "$PORT"
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+	printf "Stopping otg-webui: "
+	start-stop-daemon -K -q -p "$PIDFILE"
+	rm -f "$PIDFILE"
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	restart|reload) stop; start ;;
+	status)
+		if is_running; then
+			echo "otg-webui is running"
+		else
+			echo "otg-webui is stopped"
+			exit 1
+		fi
+		;;
+	*) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+exit $?
